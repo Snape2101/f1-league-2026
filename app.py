@@ -185,6 +185,16 @@ st.markdown("<p class='sub-header'>Aðmíraldeildin — Live Stigatafla & Tölfr
 # Hlaða gögnum
 with st.spinner("Sæki nýjustu stöðuna frá F1 API og Google Sheets..."):
     df_final, all_tracks = load_and_calculate_data()
+    # TÍMARÖÐUN Á FELLILISTA (Order the dropdown chronologically)
+    calendar_order = [
+        "albert_park", "shanghai", "suzuka", "miami", "villeneuve",
+        "monaco", "catalunya", "red_bull_ring", "silverstone", "spa",
+        "hungaroring", "zandvoort", "monza", "madring", "baku",
+        "sepang", "marina_bay", "americas", "rodriguez", "interlagos",
+        "vegas", "losail", "yas_marina"
+    ]
+    # Flokkar íslensku nöfnin út frá sönnu F1 dagatali
+    all_tracks = sorted(list(all_tracks), key=lambda x: calendar_order.index(normalize_track(x)) if normalize_track(x) in calendar_order else 99)
 
 # Hliðarstika (Sidebar) fyrir stjórntæki
 st.sidebar.header("⚙️ Stillingar")
