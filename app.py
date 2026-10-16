@@ -255,8 +255,23 @@ with tab2:
 with tab3:
     st.subheader("Stigaþróun yfir tímabilið")
     
-    # Reikna safnstik (cumulative scores) braut fyrir braut
+    # 1. TÍMARÖÐUN FYRIR LÍNURITIÐ (Sama röð og í fellilistanum)
+    calendar_order = [
+        "albert_park", "shanghai", "suzuka", "miami", "villeneuve",
+        "monaco", "catalunya", "red_bull_ring", "silverstone", "spa",
+        "hungaroring", "zandvoort", "monza", "madring", "baku",
+        "sepang", "marina_bay", "americas", "rodriguez", "interlagos",
+        "vegas", "losail", "yas_marina"
+    ]
+    
+    # Reikna stig fyrir hverja braut
     df_chart = df_final.groupby(['Match_Track', 'Nafn'])['Score'].sum().reset_index()
+    
+    # 2. Búum til falinn dálk (Race_Order) og röðum gagnasettinu rétt
+    df_chart['Race_Order'] = df_chart['Match_Track'].apply(lambda x: calendar_order.index(x) if x in calendar_order else 99)
+    df_chart = df_chart.sort_values(['Race_Order', 'Nafn'])
+    
+    # 3. Reiknum uppsöfnuð stig (núna leggjast þau rétt saman í tímaröð)
     df_chart['Kumulativ_Stig'] = df_chart.groupby('Nafn')['Score'].cumsum()
     
     fig = px.line(
@@ -265,8 +280,11 @@ with tab3:
         y='Kumulativ_Stig', 
         color='Nafn',
         markers=True,
-        title="Söfnun stiga eftir keppnum (Lægra = Betra)",
-        labels={'Match_Track': 'Keppnir', 'Kumulativ_Stig': 'Heildarstig'}
+        title="Söfnun stiga eftir kapproppum (Lægra = Betra)",
+        labels={'Match_Track': 'Kapproppur', 'Kumulativ_Stig': 'Heildarstig'}
     )
+    
+    # 4. Læsum x-ásnum á grafinu sjálfu svo Plotly teikni það rétt
+    fig.update_xaxes(categoryorder='array', categoryarray=calendar_order)
     fig.update_layout(template="plotly_dark")
     st.plotly_chart(fig, use_container_width=True)
