@@ -280,8 +280,8 @@ with tab3:
         y='Kumulativ_Stig', 
         color='Nafn',
         markers=True,
-        title="Söfnun stiga eftir kapproppum (Lægra = Betra)",
-        labels={'Match_Track': 'Kapproppur', 'Kumulativ_Stig': 'Heildarstig'}
+        title="Söfnun stiga eftir keppnum (Lægra = Betra)",
+        labels={'Match_Track': 'Keppnir', 'Kumulativ_Stig': 'Heildarstig'}
     )
     
     # 4. Læsum x-ásnum á grafinu sjálfu svo Plotly teikni það rétt
