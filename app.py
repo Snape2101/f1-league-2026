@@ -489,13 +489,13 @@ with tab1:
         "Sæti", "Breyting", "Nafn", "Heildarstig", "Pows", "Keppnir", "Missti",
         "Meðaltal", "Besta", "Versta"]]
     table["Heildarstig"] = table["Heildarstig"].astype(int)
-    st.dataframe(
-        table.style.highlight_min(subset=["Heildarstig"], color="#1e4620")
-                   .format({"Meðaltal": "{:.1f}", "Besta": "{:.0f}", "Versta": "{:.0f}"}),
-        width="stretch",
-        hide_index=True,
-    )
-    st.caption("Breyting = hreyfing á stöðu frá síðustu keppni. "
+    styled = table.style.highlight_min(subset=["Heildarstig"], color="#1e4620")
+    if table["Pows"].max() > 0:   # skip when nobody has a Pow yet (otherwise all rows light up)
+        styled = styled.highlight_max(subset=["Pows"], color="#1f3a5f")
+    styled = styled.format({"Meðaltal": "{:.1f}", "Besta": "{:.0f}", "Versta": "{:.0f}"})
+    st.dataframe(styled, width="stretch", hide_index=True)
+    st.caption("Grænt = fæst stig, blátt = flestir Pows. "
+               "Breyting = hreyfing á stöðu frá síðustu keppni. "
                "Missti = fjöldi keppna sem spá vantaði (refsing reiknuð). "
                "Meðaltal/Besta/Versta miðast aðeins við keppnir þar sem spá var skilað.")
 
