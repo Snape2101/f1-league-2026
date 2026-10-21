@@ -199,11 +199,19 @@ def fetch_races():
             for d in race["Results"]:
                 entry["results"].append({
                     "driver": f"{d['Driver']['givenName']} {d['Driver']['familyName']}",
-                    "pos": int(d["position"]),
+                    "api_pos": int(d["position"]),
+                    "pos_text": d.get("positionText", ""),
+                    "status": d.get("status", ""),
                 })
         offset += int(mr["limit"])
         if offset >= int(mr["total"]):
             break
+    # Position = place in the results list (first = 1st ... last = 22nd), exactly as the
+    # list is ordered. This does not depend on the API's own "position" field, which can
+    # be odd for retired / not classified / disqualified drivers.
+    for entry in merged.values():
+        for i, d in enumerate(entry["results"], start=1):
+            d["pos"] = i
     return [merged[k] for k in sorted(merged)], datetime.now(timezone.utc)
 
 
@@ -491,7 +499,7 @@ with tab1:
     table["Heildarstig"] = table["Heildarstig"].astype(int)
     styled = table.style.highlight_min(subset=["Heildarstig"], color="#1e4620")
     if table["Pows"].max() > 0:   # skip when nobody has a Pow yet (otherwise all rows light up)
-        styled = table.style.highlight_max(subset=["Pows"], color="#5f5b1f")
+        styled = styled.highlight_max(subset=["Pows"], color="#1f3a5f")
     styled = styled.format({"Meðaltal": "{:.1f}", "Besta": "{:.0f}", "Versta": "{:.0f}"})
     st.dataframe(styled, width="stretch", hide_index=True)
     st.caption("Grænt = fæst stig, blátt = flestir Pows. "
@@ -597,3 +605,19 @@ with tab4:
     st.caption("Raðir með **Til í API = False** tengjast engri kláraðri keppni "
                "(eðlilegt fyrir keppnir sem eru ekki búnar).")
     st.dataframe(sheet_tracks, width="stretch", hide_index=True)
+
+    st.write("#### Úrslit úr API (athugun á röðun)")
+    st.caption("**Sæti (listi)** er röðin sem er notuð til að reikna stig. Ef hún er frábrugðin "
+               "**Sæti (API)** eða fjöldi ökumanna er ekki 22, er keppnin merkt hér að neðan.")
+    chk = pd.DataFrame([{
+        "Round": r["round"], "Keppni": r["name"], "Ökumenn": len(r["results"]),
+        "Frábrugðið API": sum(d["pos"] != d["api_pos"] for d in r["results"]),
+    } for r in races])
+    st.dataframe(chk, width="stretch", hide_index=True)
+    pick = st.selectbox("Skoða úrslit keppni:", [f"R{r['round']} · {r['name']}" for r in races],
+                        index=len(races) - 1, key="diag_race")
+    rr = next(r for r in races if f"R{r['round']} · {r['name']}" == pick)
+    st.dataframe(pd.DataFrame([{
+        "Sæti (listi)": d["pos"], "Sæti (API)": d["api_pos"], "Texti": d["pos_text"],
+        "Ökumaður": d["driver"], "Staða": d["status"]} for d in rr["results"]]),
+        width="stretch", hide_index=True)
