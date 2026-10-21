@@ -19,6 +19,9 @@ API = "https://api.jolpi.ca/ergast/f1"
 
 # Timezone of the Google Sheet's "Timestamp" column (Sheet > File > Settings).
 SHEET_TIMEZONE = "Atlantic/Reykjavik"
+# Format of the Timestamp column as the Sheet shows it, e.g. "3/5/2026 9:04:58" = 5 March.
+# (Month first. Change to "%d/%m/%Y %H:%M:%S" if your Sheet is ever switched to day first.)
+TIMESTAMP_FORMAT = "%m/%d/%Y %H:%M:%S"
 
 # Scoring
 EXACT_HIT_SCORE = -4      # score for a perfect position ("Pow")
@@ -243,7 +246,11 @@ def compute(raw, races):
     g = g[(g["Nafn"] != "") & (g["Braut"].astype(str).str.strip() != "")].copy()
     g["Match_Track"] = g["Braut"].apply(lambda b: resolve_track(normalize_track(b)))
 
-    ts = pd.to_datetime(g["Timestamp"], dayfirst=True, errors="coerce")
+    ts = pd.to_datetime(g["Timestamp"].astype(str).str.strip(),
+                        format=TIMESTAMP_FORMAT, errors="coerce")
+    if ts.isna().any():
+        st.sidebar.warning(
+            f"{int(ts.isna().sum())} tímastimplar þekktust ekki — athugaðu TIMESTAMP_FORMAT.")
     g["Submitted"] = (
         ts.dt.tz_localize(SHEET_TIMEZONE, ambiguous="NaT", nonexistent="shift_forward")
           .dt.tz_convert("UTC")
