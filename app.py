@@ -192,6 +192,24 @@ def fetch_races():
     return [merged[k] for k in sorted(merged)], datetime.now(timezone.utc)
 
 
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_driver_standings():
+    """Top 3 of the drivers' championship, or None if the API can't be reached."""
+    try:
+        res = requests.get(f"{API}/current/driverstandings.json", timeout=10)
+        res.raise_for_status()
+        lists = res.json()["MRData"]["StandingsTable"]["StandingsLists"]
+        if not lists:
+            return None
+        return [{
+            "pos": int(s["position"]),
+            "driver": f"{s['Driver']['givenName']} {s['Driver']['familyName']}",
+            "points": float(s["points"]),
+        } for s in lists[0]["DriverStandings"][:3]]
+    except Exception:
+        return None
+
+
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_next_race():
     try:
@@ -465,6 +483,36 @@ with tab1:
     st.caption("Breyting = hreyfing á stöðu frá síðustu keppni. "
                "Missti = fjöldi keppna sem spá vantaði (refsing reiknuð). "
                "Meðaltal/Besta/Versta miðast aðeins við keppnir þar sem spá var skilað.")
+
+    # --- podium of the most recent race ---
+    st.markdown("---")
+    last = df_races.sort_values("Round").iloc[-1]
+    st.subheader(f"🏁 Verðlaunapallur — {last['Race']}")
+    medals = ["🥇", "🥈", "🥉"]
+    top3 = df_actual[
+        (df_actual["Match_Track"] == last["Match_Track"]) & (df_actual["Actual_Pos"] <= 3)
+    ].sort_values("Actual_Pos")
+    for col, medal, row in zip(st.columns(3), medals, top3.itertuples()):
+        with col:
+            st.metric(label=f"{medal} P{row.Actual_Pos}", value=row.Actual_Driver)
+
+    # --- top 3 of the drivers' championship ---
+    st.markdown("---")
+    st.subheader("🏆 Heimsmeistaramót ökumanna — topp 3")
+    standings_top3 = fetch_driver_standings()
+    if not standings_top3:
+        st.caption("Staða ökumanna er ekki tiltæk í augnablikinu.")
+    else:
+        leader_points = standings_top3[0]["points"]
+        for col, medal, s in zip(st.columns(3), medals, standings_top3):
+            gap = leader_points - s["points"]
+            with col:
+                st.metric(
+                    label=f"{medal} P{s['pos']} · {s['points']:g} stig",
+                    value=s["driver"],
+                    delta=f"-{gap:g} stig frá efsta" if gap > 0 else None,
+                    delta_color="off",
+                )
 
 with tab2:
     st.subheader("Skoða ákveðna keppni")
