@@ -68,6 +68,11 @@ st.markdown(
 # ==========================================
 # 1. NAME / TRACK NORMALISATION
 # ==========================================
+# Two names for the same car/seat. If a guessed driver is not in a race's results but the
+# other name IS, the guess is scored against that one. (Safe if both drive in the same
+# race: then each is matched by their own name and this fallback is never used.)
+SEAT_SWAP = {"isack hadjar": "yuki tsunoda", "yuki tsunoda": "isack hadjar"}
+
 DRIVER_ALIASES = {
     "kimi antonelli": "andrea kimi antonelli",
     "alex albon": "alexander albon",
@@ -320,6 +325,15 @@ def compute(raw, races):
     m["Predicted_Pos"] = m["pos_text"].str.extract(r"(\d+)")[0].astype(int)
     m["Match_Name"] = m["Guess"].apply(normalize_driver_name)
     m = m.merge(df_actual, on=["Match_Track", "Match_Name"], how="left")
+    # seat-swap fallback (Tsunoda <-> Hadjar)
+    pos_map = df_actual.set_index(["Match_Track", "Match_Name"])["Actual_Pos"].to_dict()
+    need = m["Actual_Pos"].isna() & m["Match_Name"].isin(SEAT_SWAP)
+    if need.any():
+        m.loc[need, "Actual_Pos"] = [
+            pos_map.get((t, SEAT_SWAP[n]))
+            for t, n in zip(m.loc[need, "Match_Track"], m.loc[need, "Match_Name"])
+        ]
+    m["Matched"] = m["Actual_Pos"].notna()   # False = guessed driver not found in the results
     m["Actual_Pos"] = m["Actual_Pos"].fillna(NOT_CLASSIFIED_POS)
     m["Difference"] = (m["Predicted_Pos"] - m["Actual_Pos"]).abs()
     m["Score"] = np.where(m["Difference"] == 0, EXACT_HIT_SCORE, m["Difference"])
@@ -621,3 +635,26 @@ with tab4:
         "Sæti (listi)": d["pos"], "Sæti (API)": d["api_pos"], "Texti": d["pos_text"],
         "Ökumaður": d["driver"], "Staða": d["status"]} for d in rr["results"]]),
         width="stretch", hide_index=True)
+
+    st.write("#### Stig hvers þátttakanda í hverri keppni")
+    st.caption("Berðu þetta saman við Sheets-útreikninginn þinn til að finna keppnina þar sem munur er. "
+               "Gildi merkt sem *Missti af* eru refsistig.")
+    per_race = scores.pivot(index="Race", columns="Nafn", values="Score")
+    order_idx = scores.drop_duplicates("Race").sort_values("Round")["Race"]
+    per_race = per_race.reindex(order_idx)
+    per_race.loc["SAMTALS"] = per_race.sum()
+    st.dataframe(per_race, width="stretch")
+
+    st.write("#### Ökumenn í spám sem finnast ekki í úrslitum")
+    st.caption("Þessir ökumenn fá sjálfkrafa sæti 22. Ef nafnið er rétt skrifað en birtist hér, "
+               "vantar alias fyrir það í `DRIVER_ALIASES`.")
+    unmatched = guess_rows[~guess_rows["Matched"]].merge(
+        df_races[["Match_Track", "Race"]], on="Match_Track", how="left")
+    if unmatched.empty:
+        st.success("Allir ökumenn í spám fundust í úrslitunum.")
+    else:
+        st.dataframe(
+            unmatched[["Race", "Nafn", "Predicted_Pos", "Guess"]]
+            .rename(columns={"Predicted_Pos": "Spáð sæti", "Guess": "Nafn í spá"})
+            .sort_values(["Race", "Nafn"]),
+            width="stretch", hide_index=True)
