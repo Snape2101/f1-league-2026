@@ -1,3 +1,4 @@
+import html
 import json
 import re
 import unicodedata
@@ -55,6 +56,10 @@ st.markdown(
                    text-align: center; margin-bottom: 0px; }
     .sub-header  { font-size: 1.1rem; text-align: center; color: #888;
                    margin-bottom: 30px; }
+    .pc-label { font-size: 0.9rem; opacity: 0.8; }
+    .pc-name  { font-size: 1.5rem; font-weight: 600; line-height: 1.25;
+                overflow-wrap: anywhere; }
+    .pc-note  { font-size: 0.85rem; opacity: 0.7; margin-top: 2px; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -119,6 +124,16 @@ TRACK_ALIASES = {
 }
 # Longest keys first so e.g. "spann" wins over "spa" in the substring fallback.
 _ALIAS_KEYS_BY_LENGTH = sorted(TRACK_ALIASES, key=len, reverse=True)
+
+
+def podium_card(label, name, note=""):
+    """Small card that shows the full name (st.metric truncates long values)."""
+    note_html = f"<div class='pc-note'>{html.escape(note)}</div>" if note else ""
+    st.markdown(
+        f"<div class='pc-label'>{html.escape(label)}</div>"
+        f"<div class='pc-name'>{html.escape(name)}</div>{note_html}",
+        unsafe_allow_html=True,
+    )
 
 
 def normalize_string(text):
@@ -494,7 +509,7 @@ with tab1:
     ].sort_values("Actual_Pos")
     for col, medal, row in zip(st.columns(3), medals, top3.itertuples()):
         with col:
-            st.metric(label=f"{medal} P{row.Actual_Pos}", value=row.Actual_Driver)
+            podium_card(f"{medal} P{row.Actual_Pos}", row.Actual_Driver)
 
     # --- top 3 of the drivers' championship ---
     st.markdown("---")
@@ -507,11 +522,10 @@ with tab1:
         for col, medal, s in zip(st.columns(3), medals, standings_top3):
             gap = leader_points - s["points"]
             with col:
-                st.metric(
-                    label=f"{medal} P{s['pos']} · {s['points']:g} stig",
-                    value=s["driver"],
-                    delta=f"-{gap:g} stig frá efsta" if gap > 0 else None,
-                    delta_color="off",
+                podium_card(
+                    f"{medal} P{s['pos']} · {s['points']:g} stig",
+                    s["driver"],
+                    note=f"−{gap:g} stig frá efsta" if gap > 0 else "",
                 )
 
 with tab2:
