@@ -33,6 +33,11 @@ MISSED_EXTRA = 0
 # False = everyone is penalised for every race since the season started
 PENALTY_FROM_FIRST_ENTRY = True
 
+# True  = guesses submitted after the race start are ignored
+# False = every guess counts, whenever it was submitted (use this if guesses were
+#         entered retroactively, or to test whether the deadline is dropping races)
+ENFORCE_DEADLINE = True
+
 st.set_page_config(
     page_title="F1 Spádómskeppnin 2026",
     page_icon="🏎️",
@@ -102,6 +107,12 @@ TRACK_ALIASES = {
     "katars": "losail",
     "katar": "losail",
     "abu dhabi": "yas_marina",
+    # labels that may appear in the Sheet next to the Icelandic name
+    "albert park": "albert_park",
+    "shanghai": "shanghai",
+    "barcelona": "catalunya",
+    "catalunya": "catalunya",
+    "madring": "madring",
 }
 # Longest keys first so e.g. "spann" wins over "spa" in the substring fallback.
 _ALIAS_KEYS_BY_LENGTH = sorted(TRACK_ALIASES, key=len, reverse=True)
@@ -162,6 +173,8 @@ def fetch_races():
                 "round": rnd,
                 "name": race["raceName"],
                 "circuit": race["Circuit"]["circuitId"],
+                "circuit_name": race["Circuit"].get("circuitName", ""),
+                "locality": race["Circuit"].get("Location", {}).get("locality", ""),
                 "start": race_start(race),
                 "results": [],
             })
@@ -197,6 +210,7 @@ def compute(raw, races):
         "Round": r["round"],
         "Race": r["name"].replace(" Grand Prix", " GP"),
         "Start": pd.Timestamp(r["start"]),
+        "Brautarnafn": r["circuit_name"],
     } for r in races])
 
     df_actual = pd.DataFrame([{
@@ -206,11 +220,28 @@ def compute(raw, races):
         "Actual_Pos": d["pos"],
     } for r in races for d in r["results"]])
 
+    # --- resolve track ids against what the API actually calls its circuits ---
+    api_text = {
+        r["circuit"]: normalize_string(" ".join(
+            [r["circuit"].replace("_", " "), r["circuit_name"], r["locality"], r["name"]]))
+        for r in races
+    }
+
+    def resolve_track(track_id):
+        """If the id isn't one the API uses, look for it in the API's circuit/race names."""
+        if track_id in api_text:
+            return track_id
+        key = track_id.replace("_", " ")
+        for cid, text in api_text.items():
+            if re.search(rf"\b{re.escape(key)}\b", text):
+                return cid
+        return track_id
+
     # --- clean guesses ---
     g = raw.copy()
     g["Nafn"] = g["Nafn"].astype(str).str.strip().str.replace(r"\s+", " ", regex=True)
     g = g[(g["Nafn"] != "") & (g["Braut"].astype(str).str.strip() != "")].copy()
-    g["Match_Track"] = g["Braut"].apply(normalize_track)
+    g["Match_Track"] = g["Braut"].apply(lambda b: resolve_track(normalize_track(b)))
 
     ts = pd.to_datetime(g["Timestamp"], dayfirst=True, errors="coerce")
     g["Submitted"] = (
@@ -224,7 +255,7 @@ def compute(raw, races):
 
     # --- deadline: guesses submitted after the race start don't count ---
     g = g.merge(df_races[["Match_Track", "Start"]], on="Match_Track", how="left")
-    g["Late"] = g["Submitted"] > g["Start"]
+    g["Late"] = (g["Submitted"] > g["Start"]) & ENFORCE_DEADLINE
     on_time = g[~g["Late"]]
     entries_by_track = on_time.groupby("Match_Track")["Nafn"].apply(lambda s: sorted(set(s))).to_dict()
 
@@ -274,7 +305,23 @@ def compute(raw, races):
     full["Status"] = np.where(full["Entered"], "Skilaði", "Missti af")
     full = full.sort_values(["Round", "Nafn"]).reset_index(drop=True)
 
-    return full, m, df_actual, df_races, players, entries_by_track, unknown_tracks
+    # --- diagnostics: how do sheet rows line up with API races? ---
+    counts = g.groupby("Match_Track").agg(
+        Spár=("Nafn", "size"), Of_seint=("Late", "sum")).reset_index()
+    diag = (
+        df_races[["Round", "Race", "Brautarnafn", "Match_Track", "Start"]]
+        .merge(counts, on="Match_Track", how="left")
+        .fillna({"Spár": 0, "Of_seint": 0})
+        .rename(columns={"Match_Track": "API circuitId", "Of_seint": "Of seint"})
+    )
+    diag["Start"] = diag["Start"].dt.strftime("%d.%m.%Y %H:%M UTC")
+    sheet_tracks = (
+        g.groupby(["Braut", "Match_Track"]).size().reset_index(name="Fjöldi")
+        .rename(columns={"Braut": "Nafn í Sheets", "Match_Track": "Varpað á"})
+    )
+    sheet_tracks["Til í API"] = sheet_tracks["Varpað á"].isin(df_races["Match_Track"])
+
+    return full, m, df_actual, df_races, players, entries_by_track, unknown_tracks, diag, sheet_tracks
 
 
 def standings(df):
@@ -311,7 +358,8 @@ if not races:
     st.info("Engin keppni er búin ennþá — stigataflan birtist eftir fyrstu keppni.")
     st.stop()
 
-scores, guess_rows, df_actual, df_races, players, entries_by_track, unknown_tracks = compute(raw, races)
+(scores, guess_rows, df_actual, df_races, players, entries_by_track,
+ unknown_tracks, diag, sheet_tracks) = compute(raw, races)
 
 if scores.empty:
     st.info("Engar gildar spár fundust fyrir kláraðar keppnir.")
@@ -392,7 +440,8 @@ for start in range(0, len(records), 6):
 
 st.markdown("---")
 
-tab1, tab2, tab3 = st.tabs(["📊 Heildarstaða", "🏎️ Einstakar Keppnir", "📈 Stigaþróun"])
+tab1, tab2, tab3, tab4 = st.tabs(
+    ["📊 Heildarstaða", "🏎️ Einstakar Keppnir", "📈 Stigaþróun", "🔧 Greining"])
 
 with tab1:
     st.subheader("Heildarstigataflan yfir tímabilið")
@@ -468,3 +517,14 @@ with tab3:
         fig.update_yaxes(autorange="reversed", dtick=1)
     fig.update_layout(template="plotly_dark")
     st.plotly_chart(fig, width="stretch")
+
+with tab4:
+    st.subheader("Greining: pössun Sheets við F1 API")
+    st.write("#### Keppnir í API")
+    st.caption("Ef **Spár** er 0 fyrir keppni þá passar brautarnafnið í Sheets ekki við API. "
+               "Ef **Of seint** er hátt var spám skilað eftir að keppni hófst (eða tímabeltið er rangt).")
+    st.dataframe(diag, width="stretch", hide_index=True)
+    st.write("#### Brautarnöfn í Sheets")
+    st.caption("Raðir með **Til í API = False** tengjast engri kláraðri keppni "
+               "(eðlilegt fyrir keppnir sem eru ekki búnar).")
+    st.dataframe(sheet_tracks, width="stretch", hide_index=True)
