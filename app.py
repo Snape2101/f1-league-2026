@@ -491,7 +491,7 @@ with tab1:
     table["Heildarstig"] = table["Heildarstig"].astype(int)
     styled = table.style.highlight_min(subset=["Heildarstig"], color="#1e4620")
     if table["Pows"].max() > 0:   # skip when nobody has a Pow yet (otherwise all rows light up)
-        styled = styled.highlight_max(subset=["Pows"], color="#1f3a5f")
+        styled = styled.highlight_max(subset=["Pows"], color="#5f5b1f")
     styled = styled.format({"Meðaltal": "{:.1f}", "Besta": "{:.0f}", "Versta": "{:.0f}"})
     st.dataframe(styled, width="stretch", hide_index=True)
     st.caption("Grænt = fæst stig, blátt = flestir Pows. "
