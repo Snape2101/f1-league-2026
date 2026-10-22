@@ -178,6 +178,28 @@ def load_guesses():
     return pd.DataFrame(ws.get_all_records())
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_fp1_times():
+    """{round: first-practice start (UTC ISO)} from the season schedule.
+    The results endpoint has no practice times, so the schedule is needed for the deadline."""
+    out, offset = {}, 0
+    try:
+        while True:
+            res = requests.get(f"{API}/current.json",
+                               params={"limit": 100, "offset": offset}, timeout=15)
+            res.raise_for_status()
+            mr = res.json()["MRData"]
+            for race in mr["RaceTable"]["Races"]:
+                if race.get("FirstPractice"):
+                    out[int(race["round"])] = race_start(race["FirstPractice"])
+            offset += int(mr["limit"])
+            if offset >= int(mr["total"]):
+                break
+    except Exception:
+        pass   # falls back to the race start for any round without a practice time
+    return out
+
+
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_races():
     """All completed races of the season. Paginates, because the API caps page size."""
@@ -214,7 +236,10 @@ def fetch_races():
     # Position = place in the results list (first = 1st ... last = 22nd), exactly as the
     # list is ordered. This does not depend on the API's own "position" field, which can
     # be odd for retired / not classified / disqualified drivers.
+    fp1_times = fetch_fp1_times()
     for entry in merged.values():
+        # Guess deadline = first practice (race start only if the schedule has no practice time)
+        entry["deadline"] = fp1_times.get(entry["round"], entry["start"])
         for i, d in enumerate(entry["results"], start=1):
             d["pos"] = i
     return [merged[k] for k in sorted(merged)], datetime.now(timezone.utc)
@@ -244,8 +269,10 @@ def fetch_next_race():
         res = requests.get(f"{API}/current/next.json", timeout=10)
         res.raise_for_status()
         race = res.json()["MRData"]["RaceTable"]["Races"][0]
+        fp1 = race.get("FirstPractice")
         return {"name": race["raceName"], "circuit": race["Circuit"]["circuitId"],
-                "start": race_start(race)}
+                "start": race_start(race),                     # race start (not used for the deadline here)
+                "fp1": race_start(fp1) if fp1 else None}       # first practice, None if the API lacks it
     except Exception:
         return None
 
@@ -259,6 +286,7 @@ def compute(raw, races):
         "Round": r["round"],
         "Race": r["name"].replace(" Grand Prix", " GP"),
         "Start": pd.Timestamp(r["start"]),
+        "Deadline": pd.Timestamp(r["deadline"]),
         "Brautarnafn": r["circuit_name"],
     } for r in races])
 
@@ -307,14 +335,14 @@ def compute(raw, races):
     unknown_tracks = sorted(g.loc[~g["Match_Track"].isin(known), "Braut"].astype(str).unique())
 
     # --- deadline: guesses submitted after the race start don't count ---
-    g = g.merge(df_races[["Match_Track", "Start"]], on="Match_Track", how="left")
-    g["Late"] = (g["Submitted"] > g["Start"]) & ENFORCE_DEADLINE
+    g = g.merge(df_races[["Match_Track", "Deadline"]], on="Match_Track", how="left")
+    g["Late"] = (g["Submitted"] > g["Deadline"]) & ENFORCE_DEADLINE
     on_time = g[~g["Late"]]
     entries_by_track = on_time.groupby("Match_Track")["Nafn"].apply(lambda s: sorted(set(s))).to_dict()
 
     # --- latest valid guess per player per completed race ---
     valid = (
-        on_time[on_time["Start"].notna()]
+        on_time[on_time["Deadline"].notna()]
         .sort_values("Submitted")
         .drop_duplicates(subset=["Nafn", "Match_Track"], keep="last")
     )
@@ -371,12 +399,13 @@ def compute(raw, races):
     counts = g.groupby("Match_Track").agg(
         Spár=("Nafn", "size"), Of_seint=("Late", "sum")).reset_index()
     diag = (
-        df_races[["Round", "Race", "Brautarnafn", "Match_Track", "Start"]]
+        df_races[["Round", "Race", "Brautarnafn", "Match_Track", "Deadline"]]
         .merge(counts, on="Match_Track", how="left")
         .fillna({"Spár": 0, "Of_seint": 0})
         .rename(columns={"Match_Track": "API circuitId", "Of_seint": "Of seint"})
     )
-    diag["Start"] = diag["Start"].dt.strftime("%d.%m.%Y %H:%M UTC")
+    diag["Deadline"] = diag["Deadline"].dt.strftime("%d.%m.%Y %H:%M UTC")
+    diag = diag.rename(columns={"Deadline": "Frestur (1. æfing)"})
     sheet_tracks = (
         g.groupby(["Braut", "Match_Track"]).size().reset_index(name="Fjöldi")
         .rename(columns={"Braut": "Nafn í Sheets", "Match_Track": "Varpað á"})
@@ -441,7 +470,7 @@ with st.sidebar.expander("📜 Reglur"):
         f"- Lægra er betra. Rétt sæti (**Pow**) gefur **{EXACT_HIT_SCORE}**, annars er skorið "
         f"munurinn á spáðu og raunverulegu sæti.\n"
         f"- Ökumaður utan úrslita gefur sæti {NOT_CLASSIFIED_POS}.\n"
-        f"- Spá sem berst eftir að keppni hefst telst ekki með.\n"
+        f"- Spá sem berst eftir að fyrsta æfing hefst telst ekki með.\n"
         f"- Sá sem skilar ekki spá fær **versta skor keppninnar × {MISSED_MULTIPLIER}** (námundað)."
         + ("\n- Refsing gildir frá fyrstu spá hvers þátttakanda." if PENALTY_FROM_FIRST_ENTRY else "")
     )
@@ -454,8 +483,19 @@ if unknown_tracks:
 # ==========================================
 nxt = fetch_next_race()
 if nxt:
-    delta = pd.Timestamp(nxt["start"]) - pd.Timestamp.now(tz="UTC")
-    when = f"{delta.days} d {delta.seconds // 3600} klst" if delta.total_seconds() > 0 else "í gangi / nýbúin"
+    now = pd.Timestamp.now(tz="UTC")
+    fp1_delta = pd.Timestamp(nxt["fp1"]) - now if nxt.get("fp1") else None
+    race_delta = pd.Timestamp(nxt["start"]) - now
+
+    def fmt(d):
+        return f"{d.days} d {d.seconds // 3600} klst {(d.seconds % 3600) // 60} mín"
+
+    if fp1_delta is not None and fp1_delta.total_seconds() > 0:
+        when = f"fyrsta æfing eftir {fmt(fp1_delta)}"
+    elif race_delta.total_seconds() > 0:
+        when = f"keppnishelgin er hafin, keppni eftir {fmt(race_delta)}"
+    else:
+        when = "keppni í gangi / nýbúin"
     entered = entries_by_track.get(nxt["circuit"], [])
     waiting = [p for p in players if p not in entered]
     msg = f"🏁 **Næsta keppni:** {nxt['name']} — {when}. "
