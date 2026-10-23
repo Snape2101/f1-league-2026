@@ -412,7 +412,8 @@ def compute(raw, races):
     )
     sheet_tracks["Til í API"] = sheet_tracks["Varpað á"].isin(df_races["Match_Track"])
 
-    return full, m, df_actual, df_races, players, entries_by_track, unknown_tracks, diag, sheet_tracks
+    return (full, m, df_actual, df_races, players, entries_by_track, unknown_tracks,
+            diag, sheet_tracks, g)
 
 
 def standings(df):
@@ -450,7 +451,7 @@ if not races:
     st.stop()
 
 (scores, guess_rows, df_actual, df_races, players, entries_by_track,
- unknown_tracks, diag, sheet_tracks) = compute(raw, races)
+ unknown_tracks, diag, sheet_tracks, all_guesses) = compute(raw, races)
 
 if scores.empty:
     st.info("Engar gildar spár fundust fyrir kláraðar keppnir.")
@@ -542,8 +543,8 @@ for start in range(0, len(records), 6):
 
 st.markdown("---")
 
-tab1, tab2, tab3, tab4 = st.tabs(
-    ["📊 Heildarstaða", "🏎️ Einstakar Keppnir", "📈 Stigaþróun", "🔧 Greining"])
+tab1, tab2, tab3, tab_guesses, tab4 = st.tabs(
+    ["📊 Heildarstaða", "🏎️ Einstakar Keppnir", "📈 Stigaþróun", "🗒️ Spár", "🔧 Greining"])
 
 with tab1:
     st.subheader("Heildarstigataflan yfir tímabilið")
@@ -648,6 +649,82 @@ with tab3:
         fig.update_yaxes(autorange="reversed", dtick=1)
     fig.update_layout(template="plotly_dark")
     st.plotly_chart(fig, width="stretch")
+
+with tab_guesses:
+    st.subheader("Spár þátttakenda")
+    st.caption("Spár birtast þegar fyrsta æfing hefst, svo enginn geti afritað af öðrum. "
+               "Gögnin koma beint úr Google Sheets.")
+
+    # every race we know of: finished ones plus the upcoming one
+    labels, deadlines = {}, {}
+    for r in df_races.sort_values("Round").itertuples():
+        labels[r.Match_Track] = f"R{r.Round} · {r.Race}"
+        deadlines[r.Match_Track] = r.Deadline
+    if nxt and nxt["circuit"] not in labels:
+        labels[nxt["circuit"]] = f"Næsta · {nxt['name'].replace(' Grand Prix', ' GP')}"
+        if nxt.get("fp1"):
+            deadlines[nxt["circuit"]] = pd.Timestamp(nxt["fp1"])
+
+    now_utc = pd.Timestamp.now(tz="UTC")
+    visible = [t for t in labels if t in deadlines and deadlines[t] <= now_utc]
+
+    if nxt and nxt["circuit"] not in visible:
+        st.info(f"Spár fyrir {nxt['name']} birtast þegar fyrsta æfing hefst.")
+
+    if not visible:
+        st.warning("Engar spár eru birtar ennþá.")
+    else:
+        choice = st.selectbox("Veldu keppni:", [labels[t] for t in visible],
+                              index=len(visible) - 1, key="guess_race")
+        track = next(t for t in visible if labels[t] == choice)
+
+        in_race = all_guesses[all_guesses["Match_Track"] == track]
+        valid = (in_race[~in_race["Late"]].sort_values("Submitted")
+                 .drop_duplicates("Nafn", keep="last").sort_values("Nafn"))
+
+        if valid.empty:
+            st.warning("Engar spár fundust fyrir þessa keppni.")
+        else:
+            pos_cols = [f"{i}. sæti" for i in range(1, 9)]
+            table = valid.set_index("Nafn")[pos_cols].T
+            table.index = range(1, 9)
+            table.index.name = "Sæti"
+            table.columns.name = None
+
+            # after the race: add the real result and colour the hits
+            diffs = pd.DataFrame()
+            actual = df_actual[df_actual["Match_Track"] == track]
+            if not actual.empty:
+                diffs = (guess_rows[guess_rows["Match_Track"] == track]
+                         .pivot(index="Predicted_Pos", columns="Nafn", values="Difference")
+                         .reindex(table.index))
+                table.insert(0, "Úrslit",
+                             actual.set_index("Actual_Pos")["Actual_Driver"].reindex(table.index))
+
+            def colour(_):
+                css = pd.DataFrame("", index=table.index, columns=table.columns)
+                for c in diffs.columns:
+                    if c in css.columns:
+                        css[c] = np.select(
+                            [diffs[c] == 0, diffs[c] == 1],
+                            ["background-color:#1e4620", "background-color:#5c4a00"],
+                            default="")
+                return css
+
+            st.dataframe(table.style.apply(colour, axis=None) if not diffs.empty else table,
+                         width="stretch")
+            if not diffs.empty:
+                st.caption("🟩 rétt sæti · 🟨 einu sæti frá")
+
+            sent = valid.set_index("Nafn")["Submitted"].dt.tz_convert(SHEET_TIMEZONE)
+            st.caption("Skilað: " + " · ".join(
+                f"{n} {t.strftime('%d.%m %H:%M')}" for n, t in sent.items()))
+            missing = [p for p in players if p not in valid["Nafn"].tolist()]
+            if missing:
+                st.caption("Skilaði ekki spá: " + ", ".join(missing))
+            late = in_race[in_race["Late"]]["Nafn"].unique().tolist()
+            if late:
+                st.caption("Barst of seint (telst ekki með): " + ", ".join(late))
 
 with tab4:
     st.subheader("Greining: pössun Sheets við F1 API")
