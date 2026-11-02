@@ -29,9 +29,15 @@ EXACT_HIT_SCORE = -4      # score for a perfect position ("Pow")
 NOT_CLASSIFIED_POS = 22   # position given to a guessed driver who isn't in the results
 
 # Penalty for not submitting (see sidebar "Reglur"):
-# a player who misses a race gets the WORST score submitted for that race x MISSED_MULTIPLIER
-# (+ an optional flat MISSED_EXTRA), rounded to a whole number.
-MISSED_MULTIPLIER = 1.38
+# penalty = REFERENCE x MISSED_MULTIPLIER + MISSED_EXTRA, rounded to a whole number.
+# PENALTY_REFERENCE:
+#   "season" = the worst single-race score ANYONE has had this season, up to and including
+#              that race. It doesn't drop when the worst guesser stays away, so skipping only
+#              "pays" if you would have set a new season record for the worst race.
+#   "race"   = the worst score submitted in that race (old rule). Weakness: if the worst
+#              guesser skips, the benchmark drops with them, so skipping can pay off.
+PENALTY_REFERENCE = "season"
+MISSED_MULTIPLIER = 1.0
 MISSED_EXTRA = 0
 # True  = penalties only count from a player's first valid entry (fair to late joiners)
 # False = everyone is penalised for every race since the season started
@@ -381,7 +387,12 @@ def compute(raw, races):
     # ignore races where nobody entered at all
     full = full[full.groupby("Match_Track")["Entered"].transform("any")].copy()
 
-    worst = full.groupby("Match_Track")["Score"].transform("max")
+    race_worst = full.groupby("Round")["Score"].max()          # submitted scores only
+    if PENALTY_REFERENCE == "season":
+        reference_by_round = race_worst.sort_index().cummax()   # worst race of the season so far
+    else:
+        reference_by_round = race_worst
+    worst = full["Round"].map(reference_by_round)
     missed = ~full["Entered"]
     if PENALTY_FROM_FIRST_ENTRY:
         first_round = full[full["Entered"]].groupby("Nafn")["Round"].min()
@@ -472,7 +483,13 @@ with st.sidebar.expander("📜 Reglur"):
         f"munurinn á spáðu og raunverulegu sæti.\n"
         f"- Ökumaður utan úrslita gefur sæti {NOT_CLASSIFIED_POS}.\n"
         f"- Spá sem berst eftir að fyrsta æfing hefst telst ekki með.\n"
-        f"- Sá sem skilar ekki spá fær **versta skor keppninnar × {MISSED_MULTIPLIER}** (námundað)."
+        + (f"- Sá sem skilar ekki spá fær **versta skor sem nokkur hefur fengið í einni keppni "
+           f"á tímabilinu** (fram að og með þeirri keppni)"
+           if PENALTY_REFERENCE == "season"
+           else "- Sá sem skilar ekki spá fær **versta skor keppninnar**")
+        + (f" × {MISSED_MULTIPLIER:g}" if MISSED_MULTIPLIER != 1 else "")
+        + (f" + {MISSED_EXTRA:g}" if MISSED_EXTRA else "")
+        + "."
         + ("\n- Refsing gildir frá fyrstu spá hvers þátttakanda." if PENALTY_FROM_FIRST_ENTRY else "")
     )
 
